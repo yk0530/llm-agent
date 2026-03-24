@@ -1,0 +1,19 @@
+{
+  "name": "ai-chat-platform",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "client",
+    "server"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm --prefix server run dev\" \"npm --prefix client run dev\"",
+    "dev:client": "npm --prefix client run dev",
+    "dev:server": "npm --prefix server run dev",
+    "build": "npm --prefix server run build && npm --prefix client run build",
+    "test": "npm --prefix server run test && npm --prefix client run test"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

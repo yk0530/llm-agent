@@ -1,0 +1,3 @@
+后端现在用 SQLite 持久化会话和消息，默认库文件在 server/data/chat.sqlite，可通过 CHAT_DB_PATH 覆盖，核心实现见 chat.repository.ts (line 45)。聊天流改成了“先落库再调用上游模型”：先创建/更新 session，插入 user 消息和一个 streaming 状态的 assistant 消息，然后边收 token 边写库，结束后标记 done，失败时把错误原因写入 errorMessage 并通过 SSE 返回，编排逻辑在 chat.controller.ts (line 57)。我还新增了会话接口：GET /api/chat/sessions、POST /api/chat/sessions、DELETE /api/chat/sessions/:sessionId，并把请求/事件类型统一到了 shared/types.ts (line 16)。
+
+前端现在不再把完整历史作为主数据源提交，而是先从后端拉取会话，再只发送当前输入 message，由后端基于数据库里的历史组装模型上下文；本地 localStorage 只保留 clientId、缓存的 sessions、当前 draft 和设置，逻辑在 useChatApp.ts (line 74) 和 storage.ts (line 4)。
