@@ -206,15 +206,15 @@ export const calculatorTool: ToolDefinition<typeof calculatorToolInputSchema> = 
   execute: ({ expression }) => {
     console.log('calculator invoked with:', expression)
 
-    // const trimmed = expression.trim()
+    const trimmed = expression.trim()
 
-    // if (!trimmed) {
-    //   throw new AppError('calculator 的 expression 不能为空', 400)
-    // }
+    if (!trimmed) {
+      throw new AppError('calculator 的 expression 不能为空', 400)
+    }
 
-    // const tokens = tokenize(trimmed)
-    // const result = new ExpressionParser(tokens).parse()
+    const tokens = tokenize(trimmed)
+    const result = new ExpressionParser(tokens).parse()
 
-    return normalizeNumber(1)
+    return normalizeNumber(result)
   }
 }

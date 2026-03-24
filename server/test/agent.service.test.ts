@@ -20,7 +20,7 @@ const baseRequest: ProviderChatRequest = {
   messages: [
     {
       role: 'user',
-      content: '2 + 3 * 4 等于多少？'
+      content: '帮我逐步计算这个问题'
     }
   ]
 }
@@ -32,7 +32,7 @@ const completeResult = (partial?: Partial<ProviderChatCompletion>): ProviderChat
 })
 
 describe('runAgent', () => {
-  it('returns direct text when no tool is needed', async () => {
+  it('returns finalRequest even when no tool is needed', async () => {
     const provider = createMockProvider(
       vi.fn(async () =>
         completeResult({
@@ -43,13 +43,15 @@ describe('runAgent', () => {
 
     const result = await runAgent(provider, baseRequest)
 
-    expect(result.mode).toBe('stream_text')
-    expect(result.text).toBe('结果是 14。')
+    expect(result.usedTools).toBe(false)
+    expect(result.finalRequest.toolChoice).toBe('none')
+    expect(result.finalRequest.messages).toEqual(baseRequest.messages)
   })
 
-  it('executes calculator tool and returns final model request', async () => {
-    const provider = createMockProvider(
-      vi.fn(async () =>
+  it('executes one tool call and then returns the final streaming request', async () => {
+    const completeChat = vi
+      .fn<ChatProviderAdapter['completeChat']>()
+      .mockResolvedValueOnce(
         completeResult({
           toolCalls: [
             {
@@ -65,17 +67,75 @@ describe('runAgent', () => {
           ]
         })
       )
-    )
+      .mockResolvedValueOnce(
+        completeResult({
+          content: '计算结果是 20。'
+        })
+      )
 
+    const provider = createMockProvider(completeChat)
     const result = await runAgent(provider, baseRequest)
 
-    expect(result.mode).toBe('stream_model')
-    expect(result.finalRequest?.tools).toBeUndefined()
-    expect(result.finalRequest?.toolChoice).toBe('none')
-    expect(result.finalRequest?.messages.at(-1)).toEqual({
+    expect(result.usedTools).toBe(true)
+    expect(result.steps).toBe(2)
+    expect(result.finalRequest.toolChoice).toBe('none')
+    expect(result.finalRequest.messages.at(-1)).toEqual({
       role: 'tool',
       toolCallId: 'call_1',
       content: '20'
+    })
+  })
+
+  it('supports multi-step tool loops before returning finalRequest', async () => {
+    const completeChat = vi
+      .fn<ChatProviderAdapter['completeChat']>()
+      .mockResolvedValueOnce(
+        completeResult({
+          toolCalls: [
+            {
+              id: 'call_1',
+              type: 'function',
+              function: {
+                name: 'calculator',
+                arguments: JSON.stringify({
+                  expression: '10+5'
+                })
+              }
+            }
+          ]
+        })
+      )
+      .mockResolvedValueOnce(
+        completeResult({
+          toolCalls: [
+            {
+              id: 'call_2',
+              type: 'function',
+              function: {
+                name: 'calculator',
+                arguments: JSON.stringify({
+                  expression: '15*2'
+                })
+              }
+            }
+          ]
+        })
+      )
+      .mockResolvedValueOnce(
+        completeResult({
+          content: '最终结果是 30。'
+        })
+      )
+
+    const provider = createMockProvider(completeChat)
+    const result = await runAgent(provider, baseRequest)
+
+    expect(result.usedTools).toBe(true)
+    expect(result.steps).toBe(3)
+    expect(result.finalRequest.messages.at(-1)).toEqual({
+      role: 'tool',
+      toolCallId: 'call_2',
+      content: '30'
     })
   })
 

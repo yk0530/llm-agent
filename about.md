@@ -37,3 +37,22 @@
     内存缓存：
 
     在 Redis 或服务内存中缓存活跃会话的消息列表，减少每次请求都去查 SQLite 的开销（虽然 SQLite 本身已经够快，但在高并发下仍有优化空间）。
+
+
+
+- 单tool
+
+    用户 prompt 进后端
+    后端带着上下文和 注册的tools 让模型先判断
+    如果模型没返回 tool_calls，直接把模型答案发给前端
+    如果模型返回了 tool_calls，后端执行工具，再把工具结果喂回模型生成最终答案
+    整个最终答案仍然通过 SSE 流式回前端，并且写入数据库
+
+- react
+
+    每轮先 completeChat
+    如果模型这轮没有 toolCalls，就结束并返回最终文本
+    如果模型这轮有 toolCalls，后端逐个执行工具
+    把这轮 assistant 的 toolCalls 和对应 tool 输出追加回消息上下文
+    再进入下一轮 completeChat
+    直到模型不再请求工具，或者达到安全上限
