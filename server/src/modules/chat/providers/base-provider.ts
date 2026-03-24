@@ -1,10 +1,28 @@
 import { AppError } from '../../../errors.js'
-import type { ProviderChatRequest, StreamHandlers } from '../chat.types.js'
+import type {
+  ProviderChatCompletion,
+  ProviderChatMessage,
+  ProviderChatRequest,
+  ProviderToolCall,
+  StreamHandlers
+} from '../chat.types.js'
 
 interface ProviderConfig {
   apiKey: string
   baseUrl: string
   providerName: string
+}
+
+interface ChatCompletionMessagePayload {
+  content?: string | Array<{ type?: string; text?: string }>
+  tool_calls?: Array<{
+    id?: string
+    type?: 'function'
+    function?: {
+      name?: string
+      arguments?: string
+    }
+  }>
 }
 
 export abstract class BaseProviderAdapter {
@@ -18,10 +36,8 @@ export abstract class BaseProviderAdapter {
     this.providerName = config.providerName
   }
 
-  async completeChat(request: ProviderChatRequest, signal?: AbortSignal) {
-    if (!this.apiKey) {
-      throw new AppError(`${this.providerName} API Key 未配置`, 500)
-    }
+  async completeChat(request: ProviderChatRequest, signal?: AbortSignal): Promise<ProviderChatCompletion> {
+    this.ensureApiKey()
 
     const response = await fetch(`${this.baseUrl}/chat/completions`, {
       method: 'POST',
@@ -40,25 +56,23 @@ export abstract class BaseProviderAdapter {
 
     const payload = (await response.json()) as {
       choices?: Array<{
-        message?: {
-          content?: string | Array<{ type?: string; text?: string }>
-        }
+        message?: ChatCompletionMessagePayload
       }>
     }
 
-    const content = this.extractMessageContent(payload)
-
-    if (!content) {
+    const message = payload.choices?.[0]?.message
+    if (!message) {
       throw new AppError(`${this.providerName} 未返回有效内容`, 502)
     }
 
-    return content
+    return {
+      content: this.extractMessageContent(message),
+      toolCalls: this.extractToolCalls(message)
+    }
   }
 
   async streamChat(request: ProviderChatRequest, handlers: StreamHandlers, signal?: AbortSignal) {
-    if (!this.apiKey) {
-      throw new AppError(`${this.providerName} API Key 未配置`, 500)
-    }
+    this.ensureApiKey()
 
     const response = await fetch(`${this.baseUrl}/chat/completions`, {
       method: 'POST',
@@ -91,7 +105,9 @@ export abstract class BaseProviderAdapter {
     return {
       model: request.model,
       stream,
-      messages,
+      messages: messages.map((message) => this.serializeMessage(message)),
+      ...(request.tools ? { tools: request.tools } : {}),
+      ...(request.toolChoice ? { tool_choice: request.toolChoice } : {}),
       ...(request.responseFormat
         ? {
             response_format: {
@@ -113,16 +129,39 @@ export abstract class BaseProviderAdapter {
     return payload.choices?.[0]?.delta?.content || payload.choices?.[0]?.message?.content || ''
   }
 
-  private extractMessageContent(data: unknown) {
-    const payload = data as {
-      choices?: Array<{
-        message?: {
-          content?: string | Array<{ type?: string; text?: string }>
-        }
-      }>
+  private serializeMessage(message: ProviderChatMessage) {
+    if (message.role === 'assistant') {
+      return {
+        role: message.role,
+        content: message.content ?? '',
+        ...(message.toolCalls
+          ? {
+              tool_calls: message.toolCalls.map((toolCall) => ({
+                id: toolCall.id,
+                type: toolCall.type,
+                function: {
+                  name: toolCall.function.name,
+                  arguments: toolCall.function.arguments
+                }
+              }))
+            }
+          : {})
+      }
     }
 
-    const content = payload.choices?.[0]?.message?.content
+    if (message.role === 'tool') {
+      return {
+        role: 'tool',
+        content: message.content,
+        tool_call_id: message.toolCallId
+      }
+    }
+
+    return message
+  }
+
+  private extractMessageContent(message: ChatCompletionMessagePayload) {
+    const content = message.content
 
     if (typeof content === 'string') {
       return content
@@ -136,6 +175,30 @@ export abstract class BaseProviderAdapter {
     }
 
     return ''
+  }
+
+  private extractToolCalls(message: ChatCompletionMessagePayload): ProviderToolCall[] {
+    return (message.tool_calls || [])
+      .map((toolCall) => {
+        if (
+          !toolCall.id ||
+          toolCall.type !== 'function' ||
+          !toolCall.function?.name ||
+          typeof toolCall.function.arguments !== 'string'
+        ) {
+          return null
+        }
+
+        return {
+          id: toolCall.id,
+          type: 'function' as const,
+          function: {
+            name: toolCall.function.name,
+            arguments: toolCall.function.arguments
+          }
+        }
+      })
+      .filter((toolCall): toolCall is ProviderToolCall => Boolean(toolCall))
   }
 
   private async consumeStream(stream: ReadableStream<Uint8Array>, handlers: StreamHandlers) {
@@ -175,6 +238,12 @@ export abstract class BaseProviderAdapter {
           continue
         }
       }
+    }
+  }
+
+  private ensureApiKey() {
+    if (!this.apiKey) {
+      throw new AppError(`${this.providerName} API Key 未配置`, 500)
     }
   }
 

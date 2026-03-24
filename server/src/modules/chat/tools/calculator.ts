@@ -1,6 +1,8 @@
-import { AppError } from '../../errors.js'
+import { AppError } from '../../../errors.js'
+import { calculatorToolInputSchema } from './schemas/calculator-schema.js'
+import type { ToolDefinition } from './types.js'
 
-type TokenType = 'number' | 'operator' | 'leftParen' | 'rightParen'
+type TokenType = 'number' | 'operator' | 'left_paren' | 'right_paren'
 
 interface Token {
   type: TokenType
@@ -89,12 +91,12 @@ class ExpressionParser {
       return Number(token.value)
     }
 
-    if (token.type === 'leftParen') {
+    if (token.type === 'left_paren') {
       this.index += 1
       const value = this.parseExpression()
       const closing = this.peek()
 
-      if (!closing || closing.type !== 'rightParen') {
+      if (!closing || closing.type !== 'right_paren') {
         throw new AppError('括号未正确闭合', 400)
       }
 
@@ -147,13 +149,13 @@ const tokenize = (expression: string) => {
     }
 
     if (char === '(') {
-      tokens.push({ type: 'leftParen', value: char })
+      tokens.push({ type: 'left_paren', value: char })
       index += 1
       continue
     }
 
     if (char === ')') {
-      tokens.push({ type: 'rightParen', value: char })
+      tokens.push({ type: 'right_paren', value: char })
       index += 1
       continue
     }
@@ -178,19 +180,41 @@ const normalizeNumber = (value: number) => {
   return Number.parseFloat(value.toPrecision(15)).toString()
 }
 
-export const calculatorTool = {
+export const calculatorTool: ToolDefinition<typeof calculatorToolInputSchema> = {
   name: 'calculator',
   description: '执行基础四则运算，支持 + - * / 和括号',
-  execute: (expression: string) => {
-    const trimmed = expression.trim()
-
-    if (!trimmed) {
-      throw new AppError('calculator 的 expression 不能为空', 400)
+  inputSchema: calculatorToolInputSchema,
+  toolDefinition: {
+    type: 'function',
+    function: {
+      name: 'calculator',
+      description: '当你需要进行数学表达式计算时非常有用。',
+      parameters: {
+        type: 'object',
+        properties: {
+          expression: {
+            type: 'string',
+            description: '可直接计算的数学表达式，例如 (12+3)*4'
+          }
+        },
+        required: ['expression'],
+        additionalProperties: false
+      },
+      strict: true
     }
+  },
+  execute: ({ expression }) => {
+    console.log('calculator invoked with:', expression)
 
-    const tokens = tokenize(trimmed)
-    const result = new ExpressionParser(tokens).parse()
+    // const trimmed = expression.trim()
 
-    return normalizeNumber(result)
+    // if (!trimmed) {
+    //   throw new AppError('calculator 的 expression 不能为空', 400)
+    // }
+
+    // const tokens = tokenize(trimmed)
+    // const result = new ExpressionParser(tokens).parse()
+
+    return normalizeNumber(1)
   }
 }

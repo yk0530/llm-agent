@@ -5,19 +5,58 @@ export interface StreamHandlers {
   onDone: () => void
 }
 
+export interface FunctionToolDefinition {
+  type: 'function'
+  function: {
+    name: string
+    description: string
+    parameters: Record<string, unknown>
+    strict?: boolean
+  }
+}
+
+export interface ProviderToolCall {
+  id: string
+  type: 'function'
+  function: {
+    name: string
+    arguments: string
+  }
+}
+
+export type ProviderChatMessage =
+  | {
+      role: 'system' | 'user'
+      content: string
+    }
+  | {
+      role: 'assistant'
+      content?: string
+      toolCalls?: ProviderToolCall[]
+    }
+  | {
+      role: 'tool'
+      content: string
+      toolCallId: string
+    }
+
 export interface ProviderChatRequest {
   provider: ModelProvider
   model: string
   systemPrompt?: string
   responseFormat?: 'json_object'
-  messages: Array<{
-    role: 'system' | 'user' | 'assistant'
-    content: string
-  }>
+  toolChoice?: 'auto' | 'none'
+  tools?: FunctionToolDefinition[]
+  messages: ProviderChatMessage[]
+}
+
+export interface ProviderChatCompletion {
+  content: string
+  toolCalls: ProviderToolCall[]
 }
 
 export interface ChatProviderAdapter {
-  completeChat: (request: ProviderChatRequest, signal?: AbortSignal) => Promise<string>
+  completeChat: (request: ProviderChatRequest, signal?: AbortSignal) => Promise<ProviderChatCompletion>
   streamChat: (
     request: ProviderChatRequest,
     handlers: StreamHandlers,

@@ -1,3 +1,39 @@
-后端现在用 SQLite 持久化会话和消息，默认库文件在 server/data/chat.sqlite，可通过 CHAT_DB_PATH 覆盖，核心实现见 chat.repository.ts (line 45)。聊天流改成了“先落库再调用上游模型”：先创建/更新 session，插入 user 消息和一个 streaming 状态的 assistant 消息，然后边收 token 边写库，结束后标记 done，失败时把错误原因写入 errorMessage 并通过 SSE 返回，编排逻辑在 chat.controller.ts (line 57)。我还新增了会话接口：GET /api/chat/sessions、POST /api/chat/sessions、DELETE /api/chat/sessions/:sessionId，并把请求/事件类型统一到了 shared/types.ts (line 16)。
+- 用户消息存入数据库
 
-前端现在不再把完整历史作为主数据源提交，而是先从后端拉取会话，再只发送当前输入 message，由后端基于数据库里的历史组装模型上下文；本地 localStorage 只保留 clientId、缓存的 sessions、当前 draft 和设置，逻辑在 useChatApp.ts (line 74) 和 storage.ts (line 4)。
+    后端现在用 SQLite 持久化会话和消息，默认库文件在 server/data/chat.sqlite，可通过 CHAT_DB_PATH 覆盖，核心实现见 chat.repository.ts (line 45)。聊天流改成了“先落库再调用上游模型”：先创建/更新 session，插入 user 消息和一个 streaming 状态的 assistant 消息，然后边收 token 边写库，结束后标记 done，失败时把错误原因写入 errorMessage 并通过 SSE 返回，编排逻辑在 chat.controller.ts (line 57)。
+
+    前端现在不再把完整历史作为主数据源提交，而是先从后端拉取会话，再只发送当前输入 message，由后端基于数据库里的历史组装模型上下文；本地 localStorage 只保留 clientId、缓存的 sessions、当前 draft 和设置，逻辑在 useChatApp.ts (line 74) 和 storage.ts (line 4)。
+
+
+- 上下文记忆
+
+    为了实现上下文记忆。大语言模型（LLM）本身是无状态的，它不知道“上一句”说了什么。为了让 AI 能够根据之前的对话内容进行连续的回答，后端必须把上下文窗口内的所有历史对话记录打包发给它。
+
+    这种做法的优缺点
+    优点：
+    实现简单：逻辑非常直观，不需要复杂的内存管理。
+    数据准确：每次都从数据库读取，确保了即使服务重启，内存数据丢失，也能恢复完整的上下文。
+    天然持久化：所有的对话记录都安全地存在 SQLite 里。
+    缺点（潜在问题）：
+    性能开销：
+    数据库 I/O：每次请求都要查询数据库读取历史消息。虽然 SQLite 很快，且代码中使用了索引（idx_chat_messages_session_created_at），但如果单次会话的消息非常多（比如几千条），查询和序列化 JSON 仍然会有耗时。
+    网络带宽：发送给 LLM API 的请求体（Payload）会随着对话轮数的增加而线性变大。这会增加 API 调用的延迟和成本（大多数 LLM 是按 Token 计费的，输入 Token 越多越贵）。
+    上下文窗口限制：
+    所有的 LLM 都有一个“上下文窗口限制”（例如 GPT-3.5-turbo 是 4k/16k，GPT-4 是 8k/32k/128k）。
+    如果历史消息总长度超过了模型的限制，直接发送会导致 API 报错（如 context_length_exceeded）。
+    当前代码没有处理这个问题：如果用户聊了很久，消息总 Token 数超过了模型上限，这个程序会崩溃。
+    生产环境中的优化方案
+    为了解决上述缺点，成熟的聊天应用通常不会“全量发送历史”，而是采用以下策略：
+
+    滑动窗口：
+
+    只保留最近的 N 条消息（例如最近 20 条）。
+    或者保留最近的 N 个 Token（例如最近 4000 个 Token）。
+    丢弃更早的消息。
+    摘要总结：
+
+    当对话太长时，先把旧的消息发送给 LLM，让它生成一段“摘要”。
+    然后在新的请求中，只发送“摘要” + 最近的消息，而不是全部原文。
+    内存缓存：
+
+    在 Redis 或服务内存中缓存活跃会话的消息列表，减少每次请求都去查 SQLite 的开销（虽然 SQLite 本身已经够快，但在高并发下仍有优化空间）。

@@ -108,8 +108,28 @@ export const streamChat = async (req: Request, res: Response) => {
 
     const agentResult = await runAgent(provider, started.modelRequest, upstreamAbortController.signal)
 
+    if (agentResult.mode === 'stream_text') {
+      const text = agentResult.text || ''
+
+      if (text) {
+        repository.appendAssistantToken(started.assistantMessageId, text)
+        sendTokenEvent(res, {
+          assistantMessageId: started.assistantMessageId,
+          token: text
+        })
+      }
+
+      repository.completeAssistantMessage(started.assistantMessageId)
+      sendDoneEvent(res, {
+        requestId: req.context.requestId,
+        sessionId: started.session.id,
+        assistantMessageId: started.assistantMessageId
+      })
+      return
+    }
+
     await provider.streamChat(
-      agentResult.finalRequest,
+      agentResult.finalRequest!,
       {
         onToken: (token) => {
           repository.appendAssistantToken(started.assistantMessageId, token)

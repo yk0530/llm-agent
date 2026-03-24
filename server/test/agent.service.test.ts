@@ -1,9 +1,15 @@
 import { describe, expect, it, vi } from 'vitest'
-import { AppError } from '../src/errors.js'
 import { runAgent } from '../src/modules/chat/agent.service.js'
-import type { ChatProviderAdapter, ProviderChatRequest, StreamHandlers } from '../src/modules/chat/chat.types.js'
+import type {
+  ChatProviderAdapter,
+  ProviderChatCompletion,
+  ProviderChatRequest,
+  StreamHandlers
+} from '../src/modules/chat/chat.types.js'
 
-const createMockProvider = (completeChat: ChatProviderAdapter['completeChat']): ChatProviderAdapter => ({
+const createMockProvider = (
+  completeChat: ChatProviderAdapter['completeChat']
+): ChatProviderAdapter => ({
   completeChat,
   streamChat: (_request: ProviderChatRequest, _handlers: StreamHandlers) => Promise.resolve()
 })
@@ -19,41 +25,103 @@ const baseRequest: ProviderChatRequest = {
   ]
 }
 
+const completeResult = (partial?: Partial<ProviderChatCompletion>): ProviderChatCompletion => ({
+  content: '',
+  toolCalls: [],
+  ...partial
+})
+
 describe('runAgent', () => {
-  it('returns direct response plan when no tool is needed', async () => {
-    const provider = createMockProvider(
-      vi.fn(async () => JSON.stringify({ type: 'respond_directly' }))
-    )
-
-    const result = await runAgent(provider, baseRequest)
-
-    expect(result.finalRequest.systemPrompt).toContain('请直接回答用户')
-    expect(result.finalRequest.systemPrompt).not.toContain('工具执行结果')
-  })
-
-  it('executes calculator tool and injects result into final prompt', async () => {
+  it('returns direct text when no tool is needed', async () => {
     const provider = createMockProvider(
       vi.fn(async () =>
-        JSON.stringify({
-          type: 'tool_call',
-          tool: 'calculator',
-          input: {
-            expression: '(2+3)*4'
-          }
+        completeResult({
+          content: '结果是 14。'
         })
       )
     )
 
     const result = await runAgent(provider, baseRequest)
 
-    expect(result.finalRequest.systemPrompt).toContain('工具：calculator')
-    expect(result.finalRequest.systemPrompt).toContain('输出：20')
+    expect(result.mode).toBe('stream_text')
+    expect(result.text).toBe('结果是 14。')
   })
 
-  it('throws when model does not return valid JSON', async () => {
-    const provider = createMockProvider(vi.fn(async () => 'not-json'))
+  it('executes calculator tool and returns final model request', async () => {
+    const provider = createMockProvider(
+      vi.fn(async () =>
+        completeResult({
+          toolCalls: [
+            {
+              id: 'call_1',
+              type: 'function',
+              function: {
+                name: 'calculator',
+                arguments: JSON.stringify({
+                  expression: '(2+3)*4'
+                })
+              }
+            }
+          ]
+        })
+      )
+    )
 
-    await expect(runAgent(provider, baseRequest)).rejects.toThrow(AppError)
-    await expect(runAgent(provider, baseRequest)).rejects.toThrow('模型没有返回合法 JSON')
+    const result = await runAgent(provider, baseRequest)
+
+    expect(result.mode).toBe('stream_model')
+    expect(result.finalRequest?.tools).toBeUndefined()
+    expect(result.finalRequest?.toolChoice).toBe('none')
+    expect(result.finalRequest?.messages.at(-1)).toEqual({
+      role: 'tool',
+      toolCallId: 'call_1',
+      content: '20'
+    })
+  })
+
+  it('throws when tool arguments are not valid JSON', async () => {
+    const provider = createMockProvider(
+      vi.fn(async () =>
+        completeResult({
+          toolCalls: [
+            {
+              id: 'call_1',
+              type: 'function',
+              function: {
+                name: 'calculator',
+                arguments: '{bad-json}'
+              }
+            }
+          ]
+        })
+      )
+    )
+
+    await expect(runAgent(provider, baseRequest)).rejects.toThrow(
+      '工具 calculator 的 arguments 不是合法 JSON'
+    )
+  })
+
+  it('throws when model requests an unregistered tool', async () => {
+    const provider = createMockProvider(
+      vi.fn(async () =>
+        completeResult({
+          toolCalls: [
+            {
+              id: 'call_1',
+              type: 'function',
+              function: {
+                name: 'bad_tool',
+                arguments: JSON.stringify({
+                  foo: 'bar'
+                })
+              }
+            }
+          ]
+        })
+      )
+    )
+
+    await expect(runAgent(provider, baseRequest)).rejects.toThrow('模型请求了未注册的工具')
   })
 })
